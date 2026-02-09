@@ -139,22 +139,13 @@ async def get_claude_client(channel_id: str) -> ClaudeSDKClient:
     if channel_id not in claude_sessions:
         client = ClaudeSDKClient(options=claude_options)
         await client.__aenter__()  # Initialize the session
-
-        # Restore conversation history if it exists
-        if channel_id in conversation_history:
-            history = conversation_history[channel_id]
-            print(f"📚 Restoring {len(history)} messages for channel {channel_id[:8]}...")
-            # Send all historical messages to rebuild context
-            for msg in history:
-                try:
-                    await client.query(msg['content'])
-                    # Consume responses to process them
-                    async for _ in client.receive_response():
-                        pass
-                except Exception as e:
-                    print(f"Error restoring message: {e}")
-
         claude_sessions[channel_id] = client
+
+        # Note: Claude Code maintains its own session context
+        # We save history for reference but don't need to replay it
+        if channel_id in conversation_history:
+            print(f"📚 Channel has {len(conversation_history[channel_id])} saved messages")
+
     return claude_sessions[channel_id]
 
 
