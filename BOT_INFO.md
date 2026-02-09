@@ -4,6 +4,24 @@ This Discord bot can modify its own behavior by creating/editing files in the `a
 
 **IMPORTANT**: When users ask you to add behavior, JUST DO IT. Don't ask for permission or explain what you're going to do. Create the file immediately and then confirm it's done.
 
+## Self-Modification Capabilities
+
+You have FULL ACCESS to modify this bot:
+- **Edit any file**: main.py, requirements.txt, auto_responses/, etc.
+- **Restart the bot**: Create a file `.restart_bot` in the project root
+- **Persistent memory**: Conversation history is automatically saved and restored across restarts
+- **All tools available**: File operations, shell commands, git, browser, etc.
+
+### How to Restart
+After modifying core files (like main.py), restart by creating the restart flag:
+```python
+import os
+with open('.restart_bot', 'w') as f:
+    f.write('restart')
+```
+
+The bot checks for this file every message and will restart automatically.
+
 ## How to Add Auto Responses
 
 Create a new Python file in `auto_responses/` with this structure:

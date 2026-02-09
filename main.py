@@ -1,6 +1,8 @@
 import discord
 from discord.ext import commands
 import os
+import sys
+import json
 from dotenv import load_dotenv
 from auto_responses import load_all_handlers, get_handler
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, HookMatcher
@@ -47,6 +49,67 @@ claude_options = ClaudeAgentOptions(
 # Store active Claude sessions per channel
 claude_sessions = {}
 
+# Conversation history file
+HISTORY_FILE = os.path.join(project_dir, '.conversation_history.json')
+conversation_history = {}
+
+# Load conversation history from disk
+def load_conversation_history():
+    global conversation_history
+    try:
+        if os.path.exists(HISTORY_FILE):
+            with open(HISTORY_FILE, 'r') as f:
+                conversation_history = json.load(f)
+            print(f"✓ Loaded conversation history for {len(conversation_history)} channels")
+    except Exception as e:
+        print(f"Warning: Could not load conversation history: {e}")
+        conversation_history = {}
+
+# Save conversation history to disk
+def save_conversation_history():
+    try:
+        with open(HISTORY_FILE, 'w') as f:
+            json.dump(conversation_history, f, indent=2)
+    except Exception as e:
+        print(f"Warning: Could not save conversation history: {e}")
+
+# Add message to history
+def add_to_history(channel_id: str, role: str, content: str):
+    if channel_id not in conversation_history:
+        conversation_history[channel_id] = []
+    conversation_history[channel_id].append({
+        'role': role,
+        'content': content
+    })
+    # Keep last 50 messages per channel
+    if len(conversation_history[channel_id]) > 50:
+        conversation_history[channel_id] = conversation_history[channel_id][-50:]
+    save_conversation_history()
+
+# Check for restart request
+RESTART_FLAG = os.path.join(project_dir, '.restart_bot')
+
+def check_restart_request():
+    if os.path.exists(RESTART_FLAG):
+        os.remove(RESTART_FLAG)
+        return True
+    return False
+
+# Restart the bot
+async def restart_bot():
+    print("\n🔄 Bot restart requested...")
+    # Cleanup sessions
+    for session in claude_sessions.values():
+        try:
+            await session.__aexit__(None, None, None)
+        except:
+            pass
+    # Restart using the same Python interpreter and script
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+# Load history on startup
+load_conversation_history()
+
 # Load auto response handlers
 print("\nLoading auto response handlers...")
 load_all_handlers()
@@ -76,6 +139,21 @@ async def get_claude_client(channel_id: str) -> ClaudeSDKClient:
     if channel_id not in claude_sessions:
         client = ClaudeSDKClient(options=claude_options)
         await client.__aenter__()  # Initialize the session
+
+        # Restore conversation history if it exists
+        if channel_id in conversation_history:
+            history = conversation_history[channel_id]
+            print(f"📚 Restoring {len(history)} messages for channel {channel_id[:8]}...")
+            # Send all historical messages to rebuild context
+            for msg in history:
+                try:
+                    await client.query(msg['content'])
+                    # Consume responses to process them
+                    async for _ in client.receive_response():
+                        pass
+                except Exception as e:
+                    print(f"Error restoring message: {e}")
+
         claude_sessions[channel_id] = client
     return claude_sessions[channel_id]
 
@@ -87,6 +165,11 @@ async def on_message(message):
 
     # Ignore messages from the bot itself
     if message.author == bot.user:
+        return
+
+    # Check for restart request
+    if check_restart_request():
+        await restart_bot()
         return
 
     # Check if we should reload auto responses
@@ -124,14 +207,21 @@ async def on_message(message):
 
     channel_id = str(message.channel.id)
 
-    # Prepend instructions for first message in channel
-    is_first_message = channel_id not in claude_sessions
+    # Prepend instructions for first message in channel (only if no history)
+    is_first_message = channel_id not in claude_sessions and channel_id not in conversation_history
     if is_first_message:
         content = f"""You are a Discord bot. When users ask you to do something, DO IT IMMEDIATELY without asking for permission.
 
-For adding bot behaviors: Read BOT_INFO.md and create files in auto_responses/ directory. Don't explain, just do it and confirm briefly.
+IMPORTANT CAPABILITIES:
+- You can modify ANY file in this project, including main.py and your own code
+- To restart the bot: create a file called .restart_bot in the project root
+- Conversation history persists across restarts automatically
+- For adding bot behaviors: Read BOT_INFO.md and create files in auto_responses/
 
 User's message: {content}"""
+
+    # Store user message in history
+    add_to_history(channel_id, 'user', content)
 
     # Show typing indicator
     async with message.channel.typing():
@@ -163,6 +253,9 @@ User's message: {content}"""
 
             if not response:
                 response = "I processed your request but didn't generate a text response."
+
+            # Store assistant response in history
+            add_to_history(channel_id, 'assistant', response)
 
             # Discord has a 2000 character limit
             if len(response) > 2000:

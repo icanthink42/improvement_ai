@@ -1,6 +1,10 @@
 # Environment variables
 .env
 
+# Bot runtime files
+.conversation_history.json
+.restart_bot
+
 # Python
 __pycache__/
 *.py[cod]
