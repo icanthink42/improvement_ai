@@ -125,16 +125,27 @@ async def on_ready():
 
 
 async def get_claude_client(channel_id: str) -> ClaudeSDKClient:
-    """Get or create a Claude client for a channel"""
+    """Get or create a Claude client for a channel with restored history"""
     if channel_id not in claude_sessions:
         client = ClaudeSDKClient(options=claude_options)
         await client.__aenter__()  # Initialize the session
-        claude_sessions[channel_id] = client
 
-        # Note: Claude Code maintains its own session context
-        # We save history for reference but don't need to replay it
-        if channel_id in conversation_history:
-            print(f"📚 Channel has {len(conversation_history[channel_id])} saved messages")
+        # Restore conversation history by including it in first message
+        if channel_id in conversation_history and conversation_history[channel_id]:
+            history = conversation_history[channel_id]
+            print(f"📚 Restoring {len(history)} messages for channel {channel_id[:8]}...")
+
+            # Create a summary of previous conversation
+            history_text = "PREVIOUS CONVERSATION HISTORY:\n"
+            for msg in history[-10:]:  # Last 10 messages
+                role = msg['role'].upper()
+                content = msg['content'][:200]  # Truncate long messages
+                history_text += f"{role}: {content}\n"
+
+            # Store the history context to prepend to first real message
+            client._history_context = history_text
+
+        claude_sessions[channel_id] = client
 
     return claude_sessions[channel_id]
 
@@ -159,9 +170,18 @@ async def on_message(message):
 
     channel_id = str(message.channel.id)
 
+    # Get or create client
+    client = await get_claude_client(channel_id)
+
+    # Check if we need to prepend history context
+    history_context = ""
+    if hasattr(client, '_history_context'):
+        history_context = client._history_context + "\n\n"
+        delattr(client, '_history_context')  # Use only once
+
     # Prepend instructions for first message in channel (only if no history)
-    is_first_message = channel_id not in claude_sessions and channel_id not in conversation_history
-    if is_first_message:
+    is_first_message = len(conversation_history.get(channel_id, [])) == 0
+    if is_first_message or history_context:
         content = f"""You are a Discord bot running on an EC2 instance with sudo privileges. You are connected to Claude Code and can modify your own code in real-time.
 
 THE GAME:
@@ -188,15 +208,14 @@ CAPABILITIES:
 
 PROJECT LOCATION: {project_dir}
 
-User's message: {content}"""
+{history_context}User's message: {content}"""
 
-    # Store user message in history
-    add_to_history(channel_id, 'user', content)
+    # Store user message in history (store original, not with system prompt)
+    add_to_history(channel_id, 'user', message.content.strip())
 
     # Show typing indicator
     async with message.channel.typing():
         try:
-            client = await get_claude_client(channel_id)
 
             # Send query to Claude Code (client already initialized, just use it)
             await client.query(content)
