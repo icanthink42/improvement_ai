@@ -3,8 +3,8 @@ from discord.ext import commands
 import os
 import sys
 import json
+import time
 from dotenv import load_dotenv
-from auto_responses import load_all_handlers, get_handler
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions, HookMatcher
 
 # Load environment variables
@@ -110,16 +110,6 @@ async def restart_bot():
 # Load history on startup
 load_conversation_history()
 
-# Load auto response handlers
-print("\nLoading auto response handlers...")
-load_all_handlers()
-auto_response_handler = get_handler()
-
-# Auto-reload check - track when handlers were last loaded
-import time
-last_reload_check = time.time()
-RELOAD_CHECK_INTERVAL = 5  # seconds
-
 
 @bot.event
 async def on_ready():
@@ -128,8 +118,8 @@ async def on_ready():
     print(f'{bot.user} has connected to Discord!')
     print(f'{"="*50}')
     print(f'Guilds: {len(bot.guilds)}')
-    print(f'Claude Code: ✓ Using Official SDK')
-    print(f'Auto responses: {len(auto_response_handler.handlers)}')
+    print(f'Claude Code: ✓ Active')
+    print(f'Self-Modification: ✓ Enabled')
     print(f'{"="*50}')
     print('Bot is ready to receive messages!\n')
 
@@ -152,8 +142,6 @@ async def get_claude_client(channel_id: str) -> ClaudeSDKClient:
 @bot.event
 async def on_message(message):
     """Event handler for messages"""
-    global last_reload_check
-
     # Ignore messages from the bot itself
     if message.author == bot.user:
         return
@@ -161,33 +149,6 @@ async def on_message(message):
     # Check for restart request
     if check_restart_request():
         await restart_bot()
-        return
-
-    # Check if we should reload auto responses
-    current_time = time.time()
-    if current_time - last_reload_check > RELOAD_CHECK_INTERVAL:
-        # Check if auto_responses directory has been modified
-        auto_responses_dir = os.path.join(project_dir, 'auto_responses')
-        try:
-            # Get list of .py files
-            py_files = [f for f in os.listdir(auto_responses_dir)
-                       if f.endswith('.py') and f != '__init__.py']
-
-            # Check if number of handlers matches number of files
-            if len(py_files) != len(auto_response_handler.handlers):
-                print(f"\n🔄 Detected changes in auto_responses/, reloading...")
-                auto_response_handler.reload()
-                print(f"✓ Reloaded! Active handlers: {len(auto_response_handler.handlers)}\n")
-        except Exception as e:
-            print(f"Error checking for auto response changes: {e}")
-
-        last_reload_check = current_time
-
-    # Process auto responses first - if handled, don't send to Claude
-    handled = await auto_response_handler.process_message(message, bot, None)
-
-    # If auto response handled it, we're done
-    if handled:
         return
 
     # Process remaining messages with Claude Code
@@ -201,13 +162,31 @@ async def on_message(message):
     # Prepend instructions for first message in channel (only if no history)
     is_first_message = channel_id not in claude_sessions and channel_id not in conversation_history
     if is_first_message:
-        content = f"""You are a Discord bot. When users ask you to do something, DO IT IMMEDIATELY without asking for permission.
+        content = f"""You are a Discord bot running on an EC2 instance with sudo privileges. You are connected to Claude Code and can modify your own code in real-time.
 
-IMPORTANT CAPABILITIES:
-- You can modify ANY file in this project, including main.py and your own code
-- To restart the bot: create a file called .restart_bot in the project root
-- Conversation history persists across restarts automatically
-- For adding bot behaviors: Read BOT_INFO.md and create files in auto_responses/
+THE GAME:
+- You are an LLM that can see and modify its own source code
+- You have full access to the filesystem, shell, internet via the EC2 instance
+- Users will interact with you through Discord messages
+- You can evolve yourself by editing main.py and other files
+- When you modify core code, create .restart_bot to apply changes
+- Conversation history persists across restarts
+
+RULES:
+1. DO IT IMMEDIATELY - No asking for permission
+2. Be creative and have fun with your capabilities
+3. Don't break the bot (but you can always fix it)
+4. Users are testing your ability to self-modify and improve
+
+CAPABILITIES:
+- Full filesystem access (read/write any file)
+- Shell commands with sudo
+- Internet/browser access
+- Git operations
+- Edit main.py to add new behaviors
+- Create .restart_bot to restart yourself
+
+PROJECT LOCATION: {project_dir}
 
 User's message: {content}"""
 
